@@ -36,7 +36,7 @@ use esp_wifi::{
 use heapless::{String, Vec};
 
 use rustlogger::{
-    epd4in0::EPDMgr,
+    epd4in0::{EPDMgr, EPD_HEIGHT, EPD_WIDTH},
     leds::LedsMgr,
     proto_parser::{reply_err, reply_ok, ParserMgr},
 };
@@ -57,6 +57,7 @@ const PASSWORD: &str = env!("PASSWORD");
 static PROTO_PARSE: Channel<CriticalSectionRawMutex, String<128>, 2> = Channel::new();
 static PROTO_RET: Channel<CriticalSectionRawMutex, String<64>, 2> = Channel::new();
 
+const FRAME_LEN: usize = EPD_WIDTH as usize * EPD_HEIGHT as usize / 2;
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -129,7 +130,15 @@ async fn main(spawner: Spawner) -> ! {
     .with_buffers(dma_rx_buf, dma_tx_buf)
     .into_async();
 
-    let edp = EPDMgr::new(spi, peripherals.GPIO6, peripherals.GPIO7, peripherals.GPIO8);
+    static mut FRAME: [u8; FRAME_LEN] = [0; FRAME_LEN];
+    let frame = unsafe { core::ptr::addr_of_mut!(FRAME).as_mut().unwrap() };
+    let edp = EPDMgr::new(
+        spi,
+        peripherals.GPIO6,
+        peripherals.GPIO7,
+        peripherals.GPIO8,
+        frame,
+    );
     let mut leds = LedsMgr::new(peripherals.GPIO3, peripherals.GPIO4, peripherals.GPIO5);
 
     spawner.spawn(connection(controller)).ok();
@@ -256,13 +265,21 @@ async fn listener_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>
 #[embassy_executor::task]
 async fn edp_task(mut edp: EPDMgr<'static>) {
     edp.init().await;
-    edp.clear().await;
+
     let mut img: Vec<String<16>, 16> = Vec::new();
     img.push(String::try_from("AABBCCDD11223344").unwrap())
         .unwrap();
+
+    edp.clear(0).await;
+    let mut count = 0;
     loop {
-        //edp.paint(&img).await;
         println!("edp..");
-        Timer::after(Duration::from_secs(5)).await;
+
+        count += 10;
+        if count % 255 == 0 {
+            count = 0;
+        }
+        edp.clear(count).await;
+        Timer::after(Duration::from_secs(10)).await;
     }
 }

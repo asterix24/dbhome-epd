@@ -36,7 +36,7 @@ use esp_wifi::{
 use heapless::{String, Vec};
 
 use rustlogger::{
-    epd4in0::{EPDMgr, EPD_HEIGHT, EPD_WIDTH},
+    epd4in2::{EPDMgr, EPD_HEIGHT, EPD_WIDTH},
     leds::LedsMgr,
     proto_parser::{reply_err, reply_ok, ParserMgr},
 };
@@ -265,11 +265,6 @@ async fn listener_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>
 #[embassy_executor::task]
 async fn edp_task(mut edp: EPDMgr<'static>) {
     edp.init().await;
-
-    let mut img: Vec<String<16>, 16> = Vec::new();
-    img.push(String::try_from("AABBCCDD11223344").unwrap())
-        .unwrap();
-
     edp.clear(0).await;
     let mut count = 0;
     loop {

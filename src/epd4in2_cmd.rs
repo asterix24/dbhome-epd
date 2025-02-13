@@ -6,6 +6,7 @@
 /// For more infos about the addresses and what they are doing look into the pdfs
 ///
 /// The description of the single commands is mostly taken from IL0398.pdf
+#[allow(dead_code)]
 pub enum Command {
     /// Set Resolution, LUT selection, BWR pixels, gate scan direction, source shift direction, booster switch, soft reset
     /// One Byte of Data:

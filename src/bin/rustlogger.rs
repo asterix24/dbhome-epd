@@ -9,6 +9,14 @@ use embassy_executor::Spawner;
 use embassy_net::{tcp::TcpSocket, Stack, StackResources};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
+use embedded_graphics::{
+    mono_font::MonoTextStyleBuilder,
+    pixelcolor::BinaryColor,
+    prelude::*,
+    //primitives::{Circle, Line, PrimitiveStyleBuilder},
+    text::{Baseline, Text, TextStyleBuilder},
+};
+
 use embedded_io_async::Write;
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -36,7 +44,7 @@ use esp_wifi::{
 use heapless::{String, Vec};
 
 use rustlogger::{
-    epd4in2::{EPDMgr, EPD_HEIGHT, EPD_WIDTH},
+    epd4in2::EPDMgr,
     leds::LedsMgr,
     proto_parser::{reply_err, reply_ok, ParserMgr},
 };
@@ -57,7 +65,6 @@ const PASSWORD: &str = env!("PASSWORD");
 static PROTO_PARSE: Channel<CriticalSectionRawMutex, String<128>, 2> = Channel::new();
 static PROTO_RET: Channel<CriticalSectionRawMutex, String<64>, 2> = Channel::new();
 
-const FRAME_LEN: usize = EPD_WIDTH as usize * EPD_HEIGHT as usize / 2;
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -130,15 +137,9 @@ async fn main(spawner: Spawner) -> ! {
     .with_buffers(dma_rx_buf, dma_tx_buf)
     .into_async();
 
-    static mut FRAME: [u8; FRAME_LEN] = [0; FRAME_LEN];
-    let frame = unsafe { core::ptr::addr_of_mut!(FRAME).as_mut().unwrap() };
-    let edp = EPDMgr::new(
-        spi,
-        peripherals.GPIO6,
-        peripherals.GPIO7,
-        peripherals.GPIO8,
-        frame,
-    );
+    //static mut FRAME: [u8; FRAME_LEN] = [0; FRAME_LEN];
+    //let frame = unsafe { core::ptr::addr_of_mut!(FRAME).as_mut().unwrap() };
+    let edp = EPDMgr::new(spi, peripherals.GPIO6, peripherals.GPIO7, peripherals.GPIO8);
     let mut leds = LedsMgr::new(peripherals.GPIO3, peripherals.GPIO4, peripherals.GPIO5);
 
     spawner.spawn(connection(controller)).ok();
@@ -266,15 +267,20 @@ async fn listener_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>
 async fn edp_task(mut edp: EPDMgr<'static>) {
     edp.init().await;
     edp.clear(0).await;
-    let mut count = 0;
+
+    // use bigger/different font
+    let style = MonoTextStyleBuilder::new()
+        .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
+        .text_color(BinaryColor::Off)
+        .background_color(BinaryColor::On)
+        .build();
+
+    let text_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    let _ = Text::with_text_style("It's working-WoB!", Point::new(50, 200), style, text_style)
+        .draw(&mut edp);
+
     loop {
         println!("edp..");
-
-        count += 10;
-        if count % 255 == 0 {
-            count = 0;
-        }
-        edp.clear(count).await;
         Timer::after(Duration::from_secs(10)).await;
     }
 }

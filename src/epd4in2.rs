@@ -6,26 +6,22 @@ use esp_hal::{
     Async,
 };
 
-use crate::proto_parser::ParserMgr;
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 
-/// Default Background Color
-//pub const DEFAULT_BACKGROUND_COLOR: Color = Color::White;
-
-//The Lookup Tables for the Display
 use crate::epd4in2_cmd::Command;
 use crate::epd4in2_const::*;
+//use crate::proto_parser::ParserMgr;
+
+pub const EPD_WIDTH: u32 = 400;
+pub const EPD_HEIGHT: u32 = 300;
 
 pub struct EPDMgr<'d> {
     busy: Input<'d>,
     rst: Output<'d>,
     dc: Output<'d>,
     channel: SpiDmaBus<'d, Async>,
-    frame: &'d mut [u8],
+    framebuffer: [u8; EPD_WIDTH as usize * EPD_HEIGHT as usize / 8],
 }
-
-// Display resolution
-pub const EPD_WIDTH: u16 = 400;
-pub const EPD_HEIGHT: u16 = 300;
 
 impl<'d> EPDMgr<'d> {
     pub fn new(
@@ -33,14 +29,13 @@ impl<'d> EPDMgr<'d> {
         busy: GpioPin<6>,
         rst: GpioPin<7>,
         dc: GpioPin<8>,
-        frame: &'d mut [u8],
     ) -> Self {
         Self {
             channel,
             busy: Input::new(busy, Pull::Up).into(),
             rst: Output::new(rst, Level::Low).into(),
             dc: Output::new(dc, Level::Low).into(),
-            frame,
+            framebuffer: [0; EPD_WIDTH as usize * EPD_HEIGHT as usize / 8],
         }
     }
 
@@ -129,18 +124,23 @@ impl<'d> EPDMgr<'d> {
         self.send_data((EPD_HEIGHT >> 8) as u8).await;
         self.send_data((EPD_HEIGHT & 0xff) as u8).await;
 
-        self.set_lut().await;
-    }
-
-    pub async fn display_frame(&mut self) {
         self.send_command(Command::VcmDcSetting).await;
         self.send_data(0x12).await;
         self.send_command(Command::VcomAndDataIntervalSetting).await;
         self.send_data(0x97).await;
 
+        self.set_lut().await;
+    }
+
+    pub async fn display_frame(&mut self) {
         self.send_command(Command::DataStartTransmission2).await;
-        for i in 0..self.frame.len() {
-            self.send_data(self.frame[i]).await;
+        for i in 0..self.framebuffer.len() {
+            let px = self.framebuffer[i];
+            for i in (0..8).step_by(2).rev() {
+                let a = (px >> i) & 1;
+                let b = (px >> i + 1) & 1;
+                self.send_data(a << 4 | b).await;
+            }
         }
         Timer::after(Duration::from_millis(2)).await;
 
@@ -150,49 +150,51 @@ impl<'d> EPDMgr<'d> {
     }
 
     pub async fn clear(&mut self, k: u8) {
-        self.frame.fill(k);
+        self.framebuffer.fill(k);
         self.display_frame().await;
     }
-    pub async fn draw(&mut self) {}
-
-    //pub async fn clear(&mut self) {
-    //    self.send_command(0x10).await;
-    //    for _ in 0..(EPD_4IN0E_HEIGHT * EPD_4IN0E_WIDTH) {
-    //        self.send_data(0).await;
-    //    }
-    //    self.turn_on_display().await;
-    //}
-
-    //pub async fn paint(&mut self, data: &Vec<String<16>, 16>) {
-    //    self.send_command(0x10).await;
-    //    for i in data.iter() {
-    //        for chifer in (0..i.len()).step_by(2) {
-    //            let pair = &i[chifer..chifer + 2];
-    //            match u32::from_str_radix(pair, 16) {
-    //                Ok(num) => {
-    //                    self.send_data(0).await;
-    //                    println!("in{}, n{}", pair, num);
-    //                }
-    //                Err(_) => println!("invalid{}", pair),
-    //            }
-    //        }
-    //    }
-    //    self.turn_on_display().await;
-    //}
-    //pub async fn cmd(&mut self, pkg: ParserMgr) -> Result<&'static str, &'static str> {
-    //    for i in pkg.args.iter() {
-    //        for chifer in (0..i.len()).step_by(2) {
-    //            let pair = &i[chifer..chifer + 2];
-    //            match u32::from_str_radix(pair, 16) {
-    //                Ok(num) => {
-    //                    self.send_command(0x10).await;
-    //                    println!("in{}, n{}", pair, num);
-    //                }
-    //                Err(_) => println!("invalid{}", pair),
-    //            }
-    //        }
-    //    }
-    //    self.turn_on_display().await;
-    //    Ok("load")
-    //}
 }
+
+impl<'d> OriginDimensions for EPDMgr<'d> {
+    fn size(&self) -> Size {
+        Size::new(EPD_WIDTH as u32, EPD_HEIGHT as u32)
+    }
+}
+impl<'d> DrawTarget for EPDMgr<'d> {
+    type Color = BinaryColor;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels.into_iter() {
+            if let Ok((x @ 0..=EPD_WIDTH, y @ 0..=EPD_HEIGHT)) = coord.try_into() {
+                let index = x + y * EPD_WIDTH / 8;
+
+                let mut bits: u8 = self.framebuffer[index as usize];
+                let px: u8 = 0x80 >> (x % 8);
+                if color.is_on() {
+                    bits |= px;
+                } else {
+                    bits &= !px;
+                }
+                self.framebuffer[index as usize] = bits;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/*  x ------------------->
+ *  y   0 .. Width
+ *  |   .   pn
+ *  |   .
+ *  |   Height
+ *  |
+ *  V
+ *
+ *  x * width / 8 byte x linea
+ *  y
+ */

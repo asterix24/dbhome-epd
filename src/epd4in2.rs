@@ -153,6 +153,16 @@ impl<'d> EPDMgr<'d> {
         self.framebuffer.fill(k);
         self.display_frame().await;
     }
+
+    pub async fn fill_frame(&mut self, buff: &[u8]) {
+        for px in buff.into_iter() {
+            for i in (0..8).step_by(2).rev() {
+                let a = (px >> i) & 1;
+                let b = (px >> i + 1) & 1;
+                self.send_data(a << 4 | b).await;
+            }
+        }
+    }
 }
 
 impl<'d> OriginDimensions for EPDMgr<'d> {

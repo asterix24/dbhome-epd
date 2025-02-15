@@ -34,7 +34,7 @@ smoltcp = { version = "0.11.0", default-features = false, features = [
 ] }
 bleps = { git = "https://github.com/bjoernQ/bleps", package = "bleps", rev = "a5148d8ae679e021b78f53fd33afb8bb35d0b62e", features = [ "macros", "async"] }
 embassy-executor = { version = "0.6.0",  features = [
-    "task-arena-size-12288",
+    "task-arena-size-65536",
 ] }
 embassy-time     = { version = "0.3.1",  features = ["generic-queue-8"] }
 embassy-sync     = { version = "0.6.1" }
@@ -48,6 +48,9 @@ embedded-io-async = "0.6.1"
 embassy-net = { version = "0.4.0", features = [ "tcp", "udp", "dhcpv4", "medium-ethernet"] }
 
 heapless = { version = "0.8.0", default-features = false }
+embedded-graphics = "0.8.1"
+epd-waveshare = "0.6.0"
+ibm437 = "0.3.3"
 
 [profile.dev]
 # Rust debug is too slow.

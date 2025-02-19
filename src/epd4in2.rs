@@ -1,3 +1,4 @@
+use embassy_sync::channel::DynamicReceiver;
 use embassy_time::{Duration, Timer};
 
 use esp_hal::{
@@ -7,6 +8,7 @@ use esp_hal::{
 };
 
 use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
+use esp_println::println;
 
 use crate::epd4in2_cmd::Command;
 use crate::epd4in2_const::*;
@@ -19,13 +21,16 @@ pub struct EPDMgr<'d> {
     busy: Input<'d>,
     rst: Output<'d>,
     dc: Output<'d>,
+    chuck_index: usize,
     channel: SpiDmaBus<'d, Async>,
+    receiver_channel: DynamicReceiver<'d, [u8; 1024]>,
     framebuffer: [u8; EPD_WIDTH as usize * EPD_HEIGHT as usize / 8],
 }
 
 impl<'d> EPDMgr<'d> {
     pub fn new(
         channel: SpiDmaBus<'d, Async>,
+        receiver_channel: DynamicReceiver<'d, [u8; 1024]>,
         busy: GpioPin<6>,
         rst: GpioPin<7>,
         dc: GpioPin<8>,
@@ -35,6 +40,8 @@ impl<'d> EPDMgr<'d> {
             busy: Input::new(busy, Pull::Up).into(),
             rst: Output::new(rst, Level::Low).into(),
             dc: Output::new(dc, Level::Low).into(),
+            chuck_index: 0 as usize,
+            receiver_channel,
             framebuffer: [0; EPD_WIDTH as usize * EPD_HEIGHT as usize / 8],
         }
     }
@@ -133,19 +140,22 @@ impl<'d> EPDMgr<'d> {
     }
 
     pub async fn display_frame(&mut self) {
+        self.send_command(Command::DataStartTransmission1).await;
+        for _ in 0..self.framebuffer.len() {
+            self.send_data(0xff).await;
+        }
+        Timer::after(Duration::from_millis(2)).await;
+
         self.send_command(Command::DataStartTransmission2).await;
-        for i in 0..self.framebuffer.len() {
-            let px = self.framebuffer[i];
-            for i in (0..8).step_by(2).rev() {
-                let a = (px >> i) & 1;
-                let b = (px >> i + 1) & 1;
-                self.send_data(a << 4 | b).await;
-            }
+        for idx in 0..self.framebuffer.len() {
+            self.send_data(self.framebuffer[idx]).await;
         }
         Timer::after(Duration::from_millis(2)).await;
 
         self.send_command(Command::DisplayRefresh).await;
         Timer::after(Duration::from_millis(100)).await;
+        println!("len buf idx {}", self.chuck_index);
+        self.chuck_index = 0;
         self.wait_idle().await;
     }
 
@@ -154,14 +164,16 @@ impl<'d> EPDMgr<'d> {
         self.display_frame().await;
     }
 
-    pub async fn fill_frame(&mut self, buff: &[u8]) {
-        for px in buff.into_iter() {
-            for i in (0..8).step_by(2).rev() {
-                let a = (px >> i) & 1;
-                let b = (px >> i + 1) & 1;
-                self.send_data(a << 4 | b).await;
-            }
+    pub async fn update_frame(&mut self) {
+        let buff = self.receiver_channel.receive().await;
+        if self.chuck_index > self.framebuffer.len() {
+            println!("Frame overflow");
+            return;
         }
+        let max_bytes = core::cmp::min(self.chuck_index - self.framebuffer.len(), buff.len());
+        self.framebuffer[self.chuck_index..self.chuck_index + max_bytes]
+            .copy_from_slice(&buff[..max_bytes]);
+        self.chuck_index += max_bytes;
     }
 }
 
@@ -182,12 +194,12 @@ impl<'d> DrawTarget for EPDMgr<'d> {
             if let Ok((x @ 0..=EPD_WIDTH, y @ 0..=EPD_HEIGHT)) = coord.try_into() {
                 let index = x + y * EPD_WIDTH / 8;
 
-                let mut bits: u8 = self.framebuffer[index as usize];
                 let px: u8 = 0x80 >> (x % 8);
+                let mut bits: u8 = self.framebuffer[index as usize];
                 if color.is_on() {
-                    bits |= px;
-                } else {
                     bits &= !px;
+                } else {
+                    bits |= px;
                 }
                 self.framebuffer[index as usize] = bits;
             }

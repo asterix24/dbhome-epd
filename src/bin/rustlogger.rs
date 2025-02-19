@@ -6,16 +6,9 @@
 
 use core::str::from_utf8;
 use embassy_executor::Spawner;
-use embassy_net::{tcp::TcpSocket, Stack, StackResources};
+use embassy_net::{tcp::TcpSocket, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
-use embedded_graphics::{
-    mono_font::MonoTextStyleBuilder,
-    pixelcolor::BinaryColor,
-    prelude::*,
-    //primitives::{Circle, Line, PrimitiveStyleBuilder},
-    text::{Baseline, Text, TextStyleBuilder},
-};
 
 use embedded_io_async::Write;
 use esp_alloc as _;
@@ -49,6 +42,14 @@ use rustlogger::{
     proto_parser::{reply_err, reply_ok, ParserMgr},
 };
 
+use embedded_graphics::{
+    mono_font::MonoTextStyleBuilder,
+    pixelcolor::BinaryColor,
+    prelude::*,
+    primitives::{Circle, Line, PrimitiveStyleBuilder},
+    text::{Baseline, Text, TextStyleBuilder},
+};
+
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -64,6 +65,7 @@ const PASSWORD: &str = env!("PASSWORD");
 
 static PROTO_PARSE: Channel<CriticalSectionRawMutex, String<128>, 2> = Channel::new();
 static PROTO_RET: Channel<CriticalSectionRawMutex, String<64>, 2> = Channel::new();
+static DATA_STREAM: Channel<CriticalSectionRawMutex, [u8; 1024], 2> = Channel::new();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -139,13 +141,22 @@ async fn main(spawner: Spawner) -> ! {
 
     //static mut FRAME: [u8; FRAME_LEN] = [0; FRAME_LEN];
     //let frame = unsafe { core::ptr::addr_of_mut!(FRAME).as_mut().unwrap() };
-    let edp = EPDMgr::new(spi, peripherals.GPIO6, peripherals.GPIO7, peripherals.GPIO8);
+
+    let in_chan = DATA_STREAM.dyn_receiver();
+    let edp = EPDMgr::new(
+        spi,
+        in_chan,
+        peripherals.GPIO6,
+        peripherals.GPIO7,
+        peripherals.GPIO8,
+    );
     let mut leds = LedsMgr::new(peripherals.GPIO3, peripherals.GPIO4, peripherals.GPIO5);
 
+    spawner.spawn(edp_task(edp)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(&stack)).ok();
     spawner.spawn(listener_task(&stack)).ok();
-    spawner.spawn(edp_task(edp)).ok();
+    spawner.spawn(getter_task(&stack)).ok();
 
     let in_chan = PROTO_PARSE.dyn_receiver();
     let out_chan = PROTO_RET.dyn_sender();
@@ -264,11 +275,83 @@ async fn listener_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>
 }
 
 #[embassy_executor::task]
-async fn edp_task(mut edp: EPDMgr<'static>) {
-    edp.init().await;
-    edp.clear(0).await;
+async fn getter_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let mut tmp_buffer = [0; 1024];
 
-    // use bigger/different font
+    loop {
+        if stack.is_link_up() {
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    println!("Waiting to get IP address...");
+    loop {
+        if let Some(config) = stack.config_v4() {
+            println!("Got IP: {}", config.address);
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    loop {
+        let mut socket = TcpSocket::new(&stack, &mut rx_buffer, &mut tx_buffer);
+        socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+
+        match socket
+            .connect(IpEndpoint::new(IpAddress::v4(192, 168, 1, 233), 20000))
+            .await
+        {
+            Ok(x) => println!("connected: {:?}", x),
+            Err(x) => {
+                println!("{:?}", x);
+                Timer::after(Duration::from_secs(10)).await;
+                continue;
+            }
+        }
+
+        let mut count = 0;
+        loop {
+            let n = match socket.read(&mut tmp_buffer).await {
+                Ok(0) => {
+                    println!("read EOF");
+                    break;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    println!("read error: {:?}", e);
+                    break;
+                }
+            };
+            println!("rxd {}", n);
+            if let Ok(x) = from_utf8(&tmp_buffer[..n]) {
+                match x {
+                    "start" => count = 0,
+                    "stop" => continue,
+                    _ => {
+                        count += 1;
+                        if let Ok(buf) = tmp_buffer[..n].try_into() {
+                            DATA_STREAM.send(buf).await;
+                        }
+                    }
+                }
+            }
+            Timer::after(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn edp_task(mut edp: EPDMgr<'static>) {
+    println!("edp..");
+    edp.init().await;
+    println!("edp..init");
+    edp.clear(0xff).await;
+    println!("edp..clear");
+
+    //// use bigger/different font
     let style = MonoTextStyleBuilder::new()
         .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
         .text_color(BinaryColor::Off)
@@ -276,11 +359,20 @@ async fn edp_task(mut edp: EPDMgr<'static>) {
         .build();
 
     let text_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
-    let _ = Text::with_text_style("It's working-WoB!", Point::new(50, 200), style, text_style)
-        .draw(&mut edp);
+    let _ =
+        Text::with_text_style("AAAABBBB", Point::new(50, 200), style, text_style).draw(&mut edp);
 
+    edp.display_frame().await;
+
+    //let in_chan = DATA_STREAM.dyn_receiver();
     loop {
         println!("edp..");
+        //for i in 1..16 {
+        //    println!("edp..p[{}]", i);
+        //    let a = in_chan.receive().await;
+        //    edp.fill_frame(a).await;
+        //}
+        //edp.display_frame().await;
         Timer::after(Duration::from_secs(10)).await;
     }
 }

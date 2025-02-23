@@ -21,8 +21,8 @@ pub struct EPDMgr<'d> {
     busy: Input<'d>,
     rst: Output<'d>,
     dc: Output<'d>,
-    chuck_index: usize,
     channel: SpiDmaBus<'d, Async>,
+    payload: [u8; EPD_WIDTH * EPD_HEIGHT / 8],
 }
 
 impl<'d> EPDMgr<'d> {
@@ -37,7 +37,7 @@ impl<'d> EPDMgr<'d> {
             busy: Input::new(busy, Pull::Up).into(),
             rst: Output::new(rst, Level::Low).into(),
             dc: Output::new(dc, Level::Low).into(),
-            chuck_index: 0 as usize,
+            payload: [0xff; EPD_WIDTH * EPD_HEIGHT / 8],
         }
     }
 
@@ -134,76 +134,41 @@ impl<'d> EPDMgr<'d> {
         self.set_lut().await;
     }
 
-    pub async fn display_frame(&mut self, frame: &[u8]) {
+    pub async fn display_frame(&mut self) {
         self.send_command(Command::DataStartTransmission1).await;
-        for _ in 0..frame.len() {
+        for _ in 0..self.payload.len() {
             self.send_data(0xff).await;
         }
         Timer::after(Duration::from_millis(2)).await;
 
         self.send_command(Command::DataStartTransmission2).await;
-        for idx in 0..frame.len() {
-            self.send_data(frame[idx]).await;
+        for idx in 0..self.payload.len() {
+            self.send_data(self.payload[idx]).await;
         }
         Timer::after(Duration::from_millis(2)).await;
 
         self.send_command(Command::DisplayRefresh).await;
         Timer::after(Duration::from_millis(100)).await;
-        println!("len buf idx {}", self.chuck_index);
-        self.chuck_index = 0;
+
         self.wait_idle().await;
     }
 
-    pub async fn cmd(
-        &mut self,
-        _pkg: ParserMgr,
-        frame: &[u8],
-    ) -> Result<&'static str, &'static str> {
-        self.display_frame(frame).await;
+    pub fn update_frame(&mut self, chunk: &[u8], offset: usize, size: usize) {
+        if offset + size > self.payload.len() {
+            println!("Frame overflow");
+            return;
+        }
+
+        let free_space = self.payload.len() - offset;
+        let max_bytes = core::cmp::min(free_space, size as usize);
+
+        println!("{} {} {} {}", offset, free_space, max_bytes, size);
+
+        self.payload[offset..(offset + max_bytes)].copy_from_slice(&chunk[..max_bytes]);
+    }
+
+    pub async fn cmd(&mut self, _pkg: ParserMgr) -> Result<&'static str, &'static str> {
+        self.display_frame().await;
         Ok("Update")
     }
 }
-
-//impl<'d> OriginDimensions for EPDMgr<'d> {
-//    fn size(&self) -> Size {
-//        Size::new(EPD_WIDTH as u32, EPD_HEIGHT as u32)
-//    }
-//}
-//impl<'d> DrawTarget for EPDMgr<'d> {
-//    type Color = BinaryColor;
-//    type Error = core::convert::Infallible;
-//
-//    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-//    where
-//        I: IntoIterator<Item = Pixel<Self::Color>>,
-//    {
-//        for Pixel(coord, color) in pixels.into_iter() {
-//            if let Ok((x @ 0..=EPD_WIDTH, y @ 0..=EPD_HEIGHT)) = coord.try_into() {
-//                let index = x + y * EPD_WIDTH / 8;
-//
-//                let px: u8 = 0x80 >> (x % 8);
-//                let mut bits: u8 = self.framebuffer[index as usize];
-//                if color.is_on() {
-//                    bits &= !px;
-//                } else {
-//                    bits |= px;
-//                }
-//                self.framebuffer[index as usize] = bits;
-//            }
-//        }
-//
-//        Ok(())
-//    }
-//}
-//
-/*  x ------------------->
- *  y   0 .. Width
- *  |   .   pn
- *  |   .
- *  |   Height
- *  |
- *  V
- *
- *  x * width / 8 byte x linea
- *  y
- */

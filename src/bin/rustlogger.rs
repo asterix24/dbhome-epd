@@ -7,10 +7,10 @@
 use core::str::from_utf8;
 use embassy_executor::Spawner;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{tcp::TcpSocket, IpAddress, IpEndpoint, Stack, StackResources};
+use embassy_net::{tcp::TcpSocket, Stack, StackResources};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{with_timeout, Duration, Timer};
+use embassy_time::{Duration, Timer};
 
 use embedded_io_async::Write;
 use esp_alloc as _;
@@ -39,17 +39,9 @@ use esp_wifi::{
 use heapless::{String, Vec};
 
 use rustlogger::{
-    epd4in2::{EPDMgr, EPD_HEIGHT, EPD_WIDTH},
+    epd4in2::EPDMgr,
     leds::LedsMgr,
     proto_parser::{reply_err, reply_ok, ParserMgr},
-};
-
-use embedded_graphics::{
-    mono_font::MonoTextStyleBuilder,
-    pixelcolor::BinaryColor,
-    prelude::*,
-    primitives::{Circle, Line, PrimitiveStyleBuilder},
-    text::{Baseline, Text, TextStyleBuilder},
 };
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
@@ -140,25 +132,14 @@ async fn main(spawner: Spawner) -> ! {
     .with_buffers(dma_rx_buf, dma_tx_buf)
     .into_async();
 
-    let mut epd: EPDMgr = EPDMgr::new(spi, peripherals.GPIO6, peripherals.GPIO7, peripherals.GPIO8);
     let mut leds = LedsMgr::new(peripherals.GPIO3, peripherals.GPIO4, peripherals.GPIO5);
-    let mut chunk_len: usize = 0;
-
-    println!("edp..");
-    epd.init().await;
-    println!("edp..init");
-
-    static FRAME: [u8; EPD_WIDTH * EPD_HEIGHT / 8 as usize] =
-        [0; EPD_WIDTH * EPD_HEIGHT / 8 as usize];
-
-    let display_frame = unsafe { core::ptr::addr_of_mut!(FRAME).as_mut().unwrap() };
+    let epd = EPDMgr::new(spi, peripherals.GPIO6, peripherals.GPIO7, peripherals.GPIO8);
 
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(&stack)).ok();
     spawner.spawn(listener_task(&stack)).ok();
-    spawner.spawn(frame_task(&stack, display_frame)).ok();
+    spawner.spawn(epd_task(&stack, epd)).ok();
 
-    //spawner.spawn(edp_task(edp)).ok()
     //spawner.spawn(getter_task(&stack)).ok();
 
     let in_chan = PROTO_PARSE.dyn_receiver();
@@ -168,7 +149,7 @@ async fn main(spawner: Spawner) -> ! {
         let pkg = ParserMgr::new(in_chan.receive().await);
         let reply = match pkg.cmd.as_str() {
             "led" => leds.cmd(pkg),
-            "show" => epd.cmd(pkg, display_frame).await,
+            //"show" => epd.cmd(pkg).await,
             _ => Err("Invalid Command"),
         };
 
@@ -279,9 +260,9 @@ async fn listener_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>
 }
 
 #[embassy_executor::task]
-async fn frame_task(
+async fn epd_task(
     stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>,
-    display_frame: &'static [u8],
+    mut epd: EPDMgr<'static>,
 ) {
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
@@ -305,6 +286,8 @@ async fn frame_task(
         Timer::after(Duration::from_millis(500)).await;
     }
 
+    epd.init().await;
+
     let mut udp_socket = UdpSocket::new(
         stack,
         &mut rx_meta,
@@ -317,32 +300,24 @@ async fn frame_task(
         loop {
             match udp_socket.recv_from(&mut tmp_buffer).await {
                 Ok((n, sender)) => {
-                    if n < 8 {
-                        continue;
-                    }
-
-                    if chuck_index > display_frame.len() {
-                        println!("Frame overflow");
-                        continue;
-                    }
-
                     let mut field: [u8; 4] = [0; 4];
                     field.copy_from_slice(&tmp_buffer[..4]);
-                    let id = u32::from_ne_bytes(field);
+                    let offset = i32::from_ne_bytes(field);
                     field.copy_from_slice(&tmp_buffer[4..8]);
                     let size = u32::from_ne_bytes(field);
 
-                    let max_bytes =
-                        core::cmp::min(chuck_index - display_frame.len(), size as usize);
+                    print!("{}: {:?} {} ", sender, n, offset);
 
-                    display_frame[chuck_index..chuck_index + max_bytes]
-                        .copy_from_slice(&tmp_buffer[8..max_bytes]);
-                    chuck_index += max_bytes;
+                    if offset < 0 {
+                        epd.display_frame().await;
+                        continue;
+                    }
 
-                    println!("Got: {} {:?} id:{} size:{}", sender, n, id, size);
+                    epd.update_frame(&tmp_buffer[8..n], offset as usize, size as usize);
                 }
                 Err(e) => {
                     println!("UDP Err: {:?}", e);
+                    break;
                 }
             }
         }
@@ -350,34 +325,16 @@ async fn frame_task(
 }
 
 //#[embassy_executor::task]
-//async fn edp_task(mut edp: EPDMgr<'static>) {
+//async fn edp_task(edp: &'static mut EPDMgr<'static>) {
 //    println!("edp..");
 //    edp.init().await;
 //    println!("edp..init");
-//    edp.clear(0xff).await;
-//    println!("edp..clear");
-//
-//    //// use bigger/different font
-//    let style = MonoTextStyleBuilder::new()
-//        .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
-//        .text_color(BinaryColor::Off)
-//        .background_color(BinaryColor::On)
-//        .build();
-//
-//    let text_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
-//    let _ =
-//        Text::with_text_style("AAAABBBB", Point::new(50, 200), style, text_style).draw(&mut edp);
 //
 //    edp.display_frame().await;
 //
 //    //let in_chan = DATA_STREAM.dyn_receiver();
 //    loop {
 //        println!("edp..");
-//        //for i in 1..16 {
-//        //    println!("edp..p[{}]", i);
-//        //    let a = in_chan.receive().await;
-//        //    edp.fill_frame(a).await;
-//        //}
 //        Timer::after(Duration::from_secs(10)).await;
 //    }
 //}

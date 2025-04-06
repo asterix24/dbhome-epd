@@ -140,8 +140,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(listener_task(&stack)).ok();
     spawner.spawn(epd_task(&stack, epd)).ok();
 
-    //spawner.spawn(getter_task(&stack)).ok();
-
     let in_chan = PROTO_PARSE.dyn_receiver();
     let out_chan = PROTO_RET.dyn_sender();
 
@@ -149,7 +147,6 @@ async fn main(spawner: Spawner) -> ! {
         let pkg = ParserMgr::new(in_chan.receive().await);
         let reply = match pkg.cmd.as_str() {
             "led" => leds.cmd(pkg),
-            //"show" => epd.cmd(pkg).await,
             _ => Err("Invalid Command"),
         };
 
@@ -323,18 +320,3 @@ async fn epd_task(
         }
     }
 }
-
-//#[embassy_executor::task]
-//async fn edp_task(edp: &'static mut EPDMgr<'static>) {
-//    println!("edp..");
-//    edp.init().await;
-//    println!("edp..init");
-//
-//    edp.display_frame().await;
-//
-//    //let in_chan = DATA_STREAM.dyn_receiver();
-//    loop {
-//        println!("edp..");
-//        Timer::after(Duration::from_secs(10)).await;
-//    }
-//}

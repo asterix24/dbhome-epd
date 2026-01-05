@@ -1,0 +1,17 @@
+services:
+  scraper:
+    build: .
+    image: asterix24/e-ink-scraper:0.1
+    container_name: e-ink-scraper
+    ipc: host
+    volumes:
+      - .:/app
+    ports:
+      - 8132:8312
+
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+
+    environment:
+      - PYTHONUNBUFFERED=1  # Fa vedere i print() di Python subito nel terminale
+
+    command: python e-ink.py

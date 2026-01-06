@@ -12,6 +12,10 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
 
     environment:
-      - PYTHONUNBUFFERED=1  # Fa vedere i print() di Python subito nel terminale
+      - PYTHONUNBUFFERED=1
+      - HASS_IP=${HASS_IP}
+      - TOKEN=${TOKEN}
+      - INK_URL=${INK_URL}
+      - BASE_URL=${BASE_URL}
 
     command: python e-ink.py

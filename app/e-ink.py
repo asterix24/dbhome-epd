@@ -54,6 +54,7 @@ if __name__ == "__main__":
     token = os.getenv("TOKEN", None)
     ink_url = os.getenv("INK_URL", None)
     base_url = os.getenv("BASE_URL", None)
+    time_round = os.getenv("TIME_ROUND", 5)
     if token is None or ink_url is None or base_url is None:
         print("Invalid parameters")
         print(f"{token}")
@@ -61,4 +62,4 @@ if __name__ == "__main__":
         print(f"{base_url}")
         sys.exit(1)
 
-    take_shot(token, base_url, ink_url, 5)
+    take_shot(token, base_url, ink_url, time_round)

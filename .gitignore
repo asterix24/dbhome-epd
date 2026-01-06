@@ -19,3 +19,4 @@ target/
 .venv
 *.bin
 *.png
+app/__pycache__

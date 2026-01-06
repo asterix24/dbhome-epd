@@ -2,9 +2,10 @@ from playwright.sync_api import sync_playwright
 import json
 import png_to_bit
 from png_to_bit import prepare_img
+import time
 
 
-def take_shot(token, base_url, ink_url):
+def take_shot(token, base_url, ink_url, round_time):
     with sync_playwright() as p:
         print("Go..")
         browser = p.webkit.launch(headless=True)
@@ -26,18 +27,25 @@ def take_shot(token, base_url, ink_url):
             json.dumps(hass_tokens),
         )
 
-        print(f"Navigazione verso {ink_url}...")
-        page.goto(ink_url)
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(2000)
+        try:
+            print(f"Navigazione verso {ink_url}...")
+            while True:
+                page.goto(ink_url)
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(2000)
 
-        buffer = page.screenshot(clip={"x": 390, "y": 5, "width": 500, "height": 320})
-        img = png_to_bit.prepare_img(buffer)
-        b = png_to_bit.image_to_bit_buffer(img, out_bw_name="uno.png")
-        png_to_bit.save_bin(b)
-        print("Screenshot salvato.")
+                buffer = page.screenshot(
+                    clip={"x": 390, "y": 5, "width": 500, "height": 320}
+                )
+                img = png_to_bit.prepare_img(buffer)
+                b = png_to_bit.image_to_bit_buffer(img, out_bw_name="uno.png")
+                png_to_bit.save_bin(b)
 
-        browser.close()
+                print("Done")
+                time.sleep(round_time)
+        except KeyboardInterrupt as e:
+            print("Close Browser")
+            browser.close()
 
 
 if __name__ == "__main__":
@@ -53,4 +61,4 @@ if __name__ == "__main__":
         print(f"{base_url}")
         sys.exit(1)
 
-    take_shot(token, base_url, ink_url)
+    take_shot(token, base_url, ink_url, 5)

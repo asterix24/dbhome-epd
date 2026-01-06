@@ -17,5 +17,6 @@ services:
       - TOKEN=${TOKEN}
       - INK_URL=${INK_URL}
       - BASE_URL=${BASE_URL}
+      - TIME_ROUND=${TIME_ROUND}
 
     command: python e-ink.py

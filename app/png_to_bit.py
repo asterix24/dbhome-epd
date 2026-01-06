@@ -35,7 +35,6 @@ def save_bin(buffer, image_path="uno"):
         p.write(buffer)
 
     print(f"buff: {len(buffer)}byte")
-    print("done")
 
 
 if __name__ == "__main__":

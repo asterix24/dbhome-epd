@@ -4,6 +4,9 @@ services:
     image: asterix24/e-ink-scraper:0.1
     container_name: e-ink-scraper
     ipc: host
+    env_file:
+      - config.env
+
     volumes:
       - .:/app
     ports:
@@ -13,10 +16,5 @@ services:
 
     environment:
       - PYTHONUNBUFFERED=1
-      - HASS_IP=${HASS_IP}
-      - TOKEN=${TOKEN}
-      - INK_URL=${INK_URL}
-      - BASE_URL=${BASE_URL}
-      - TIME_ROUND=${TIME_ROUND}
 
     command: python e-ink.py

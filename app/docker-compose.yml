@@ -9,12 +9,14 @@ services:
 
     volumes:
       - .:/app
+      - /tmp:/tmp
     ports:
       - 8132:8312
+      - 22000:22000
 
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
 
     environment:
       - PYTHONUNBUFFERED=1
 
-    command: python e-ink.py
+    command: ./run-server.sh
